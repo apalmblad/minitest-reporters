@@ -64,7 +64,7 @@ module Minitest
         def xml.trunc!(txt)
           txt.sub(/\n.*/m, '...')
         rescue ArgumentError
-          warn "JUNIT REPORTER ERROR FOR #{test.name}"
+          warn format('JUNIT REPORTER ERROR FOR %s', test.respond_to?(:name) ? test.name : test)
           warn $ERROR_INFO.message
           txt
         end
