@@ -1,5 +1,6 @@
 require 'builder'
 require 'fileutils'
+require 'pathname'
 module Minitest
   module Reporters
     # A reporter for writing JUnit test reports
@@ -13,6 +14,7 @@ module Minitest
         super({})
         @reports_path = File.absolute_path(reports_dir)
         @single_file = options[:single_file]
+        @base_path = options[:base_path] || Dir.pwd
 
         if empty
           puts "Emptying #{@reports_path}"
@@ -25,36 +27,59 @@ module Minitest
         super
 
         puts "Writing XML reports to #{@reports_path}"
-        suites = tests.group_by(&:class)
+        suites = tests.group_by { |test|
+          test_class(test)
+        }
 
         if @single_file
-          write_xml_file_for("minitest", tests.group_by(&:class).values.flatten)
+          xml = Builder::XmlMarkup.new(:indent => 2)
+          xml.instruct!
+          xml.testsuites do
+            suites.each do |suite, tests|
+              parse_xml_for(xml, suite, tests)
+            end
+          end
+          File.open(filename_for('minitest'), "w") { |file| file << xml.target! }
         else
           suites.each do |suite, tests|
-            write_xml_file_for(suite, tests)
+            xml = Builder::XmlMarkup.new(:indent => 2)
+            xml.instruct!
+            xml.testsuites do
+              parse_xml_for(xml, suite, tests)
+            end
+            File.open(filename_for(suite), "w") { |file| file << xml.target! }
           end
         end
-
       end
 
       private
 
-      def write_xml_file_for(suite, tests)
-        suite_result = analyze_suite(tests)
+      def get_source_location(result)
+        if result.respond_to? :klass
+          result.source_location
+        else
+          result.method(result.name).source_location
+        end
+      end
 
-        xml = Builder::XmlMarkup.new(:indent => 2)
-        xml.instruct!
-        xml.testsuite(:name => suite, :skipped => suite_result[:skip_count], :failures => suite_result[:fail_count],
+      def parse_xml_for(xml, suite, tests)
+        suite_result = analyze_suite(tests)
+        file_path = Pathname.new(get_source_location(tests.first).first)
+        base_path = Pathname.new(@base_path)
+        relative_path = file_path.relative_path_from(base_path)
+
+        xml.testsuite(:name => suite, :filepath => relative_path,
+                      :skipped => suite_result[:skip_count], :failures => suite_result[:fail_count],
                       :errors => suite_result[:error_count], :tests => suite_result[:test_count],
                       :assertions => suite_result[:assertion_count], :time => suite_result[:time]) do
           tests.each do |test|
-            xml.testcase(:name => test.name, :classname => suite, :assertions => test.assertions,
+            lineno = get_source_location(test).last
+            xml.testcase(:name => test.name, :lineno => lineno, :classname => suite, :assertions => test.assertions,
                          :time => test.time) do
               xml << xml_message_for(test) unless test.passed?
             end
           end
         end
-        File.open(filename_for(suite), "w") { |file| file << xml.target! }
       end
 
       def xml_message_for(test)
@@ -111,6 +136,7 @@ module Minitest
 
       def analyze_suite(tests)
         result = Hash.new(0)
+        result[:time] = 0
         tests.each do |test|
           result[:"#{result(test)}_count"] += 1
           result[:assertion_count] += test.assertions
